@@ -3,7 +3,20 @@
 const svrPort = parseInt(Deno.args[0] || "20810");
 const svrHost = Deno.args[1] || "localhost";
 const hardcodedBlocks = ["/config.json", "/access/*"];
-console.log("Loading dependencies...")
+
+// Prepare xConsole
+var xConsole = {};
+xConsole.log = function (text) {
+	console.log(`[INFL - ${(new Date()).toJSON()}] ${text}`);
+};
+xConsole.error = function (text) {
+	console.error(`[ERROR - ${(new Date()).toJSON()}] ${text}`);
+};
+xConsole.warn = function (text) {
+	console.warn(`[WARN - ${(new Date()).toJSON()}] ${text}`);
+};
+
+xConsole.log("Loading dependencies...")
 // WEBSF
 import {} from "./libs/webcirque/websf/alter.js";
 import {} from "./libs/webcirque/websf/flyover.js";
@@ -22,28 +35,28 @@ import {} from "./libs/cryptojs/cryptojs-min/ripemd160.js";
 import {} from "./libs/cryptojs/cryptojs-min/sha256.js";
 import {} from "./libs/cryptojs/cryptojs-min/sha512.js";
 import {} from "./libs/cryptojs/cryptojs-min/sha3.js";
-console.log("Preparing configuration...");
+xConsole.log("Preparing configuration...");
 // Config global vars
 var conf = {};
 var useHashAlgo, useHashLength, useHashOptions, useTypes, compiledGlobalBlock;
 var adminToken;
 var reloadConfig = async function () {
-	console.log("Loading configuration...");
+	xConsole.log("Loading configuration...");
 	// Load file
 	try {
 		let tmpConf = await Deno.readTextFile("./config.json");
 		conf = JSON.parse(tmpConf);
 	} catch (err) {
-		console.error(err.stack);
-		console.error(new Error("File loading error. Configuration unchanged..."));
+		xConsole.error(err.stack);
+		xConsole.error(new Error("File loading error. Configuration unchanged..."));
 	};
-	// console.log(JSON.stringify(conf));
+	// xConsole.log(JSON.stringify(conf));
 	// Load map
 	CryptoJS.enc.Base64._map = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_ ";
 	if (conf.verify?.map?.length > 63) {
 		var realMap = conf.verify.map.slice(0, 65);
 		CryptoJS.enc.Base64._map = realMap;
-		console.log("Custom map loaded: [" + realMap + "]");
+		xConsole.log("Custom map loaded: [" + realMap + "]");
 	};
 	// Load hashing configuration
 	useHashAlgo = "SHA1", useHashLength = 20, useHashOptions = {};
@@ -58,39 +71,39 @@ var reloadConfig = async function () {
 				useHashOptions = conf.verify.hash.options;
 			};
 		} else {
-			console.error(new Error("Unknown or unsafe hashing algorithm: " + useHashAlgoTmp));
+			xConsole.error(new Error("Unknown or unsafe hashing algorithm: " + useHashAlgoTmp));
 		};
 	};
-	console.log("Used hashing algorithm: " + useHashAlgo);
+	xConsole.log("Used hashing algorithm: " + useHashAlgo);
 	// Load allowed types
 	useTypes = [];
 	if (conf.types) {
 		useTypes = conf.types;
 	};
+	xConsole.log("Allowed types: " + useTypes.toString());
 	// Load admin token
-	console.log("Importing admin tokens...");
+	xConsole.log("Importing admin tokens...");
 	adminToken = [];
 	conf.verify?.admin?.forEach(function (e) {
 		if (e.length == useHashLength) {
 			adminToken.push(e);
-			console.log(`Admin token [${e}] applied.`);
+			xConsole.log(`Admin token [${e.slice(0, 4)}] applied.`);
 		} else {
-			console.warn(`Admin token [${e}] is invalid.`);
+			xConsole.warn(`Admin token [${e}] is invalid.`);
 		};
 	});
 	if (adminToken.length < 1) {
-		console.log("No admin token available.");
+		xConsole.log("No admin token available.");
 	};
-	console.log("Allowed types: " + useTypes.toString());
 	// Load blocklists
-	console.log("Importing global blocklist...");
+	xConsole.log("Importing global blocklist...");
 	compiledGlobalBlock = new Set(hardcodedBlocks);
-	console.log("Configuration loaded.");
+	xConsole.log("Configuration loaded.");
 };
 await reloadConfig();
-console.log("Starting SnowPlum...")
+xConsole.log("Starting SnowPlum...")
 const server = Deno.listen({port: svrPort, hostname: svrHost});
-console.log("An HTTP server is up at [http://${host}:${port}/]".alter({host: svrHost, port: svrPort}));
+xConsole.log("An HTTP server is up at [http://${host}:${port}/]".alter({host: svrHost, port: svrPort}));
 // List match
 var matchList = function (path, list) {
 	let reqBlocked = "";
@@ -154,6 +167,10 @@ for await (const incoming of server) {
 				var idToken = search.get(mapToken);
 				var seedOTxt = `${idType},${idUser},${mapSecret}`;
 				var seedTxt = CryptoJS.enc.Base64.stringify(CryptoJS.enc.Hex.parse(CryptoJS[useHashAlgo](seedOTxt, useHashOptions).toString())).trimEnd().slice(0, useHashLength);
+				if (seedTxt != idToken) {
+					xConsole.error(`Original: [${seedOTxt}],Expected token: ${seedTxt}`);
+					throw(new Error("Used invalid token."));
+				};
 				let reqBlocked = matchList(path, [...Array.from(compiledGlobalBlock)]);
 				if (reqBlocked.length > 0) {
 					throw(new Error(`Blocked with rule: \"${reqBlocked}\"`));
@@ -161,20 +178,36 @@ for await (const incoming of server) {
 				// Final reply
 				try {
 					if (matchList(path, ["/admin/*"])) {
-						body = "Admin mode.";
+						if (!idToken.withAny(adminToken)) {
+							throw(new Error("Operation not permitted."));
+						};
+						body = "Requested admin mode, but with no valid actions.";
 						status = 200;
+						switch (path.slice(6)) {
+							case "/reloadConf": {
+								xConsole.log("Requested config reload via Web.");
+								await reloadConfig();
+								body = `Configuration reloaded on ${(new Date()).toJSON()}.`;
+								break;
+							};
+							case "/showConf": {
+								xConsole.log("Requested config display via Web.");
+								body = JSON.stringify(conf);
+								break;
+							};
+						};
 					} else {
 						body = await Deno.readTextFile("./" + idType + path);
 						status = 200;
-					}
+					};
 				} catch (err) {
-					body = "400 Internal Error"
+					body = "400 Internal Error";
 					status = 400;
-					console.error(new Error(`Requested ${request.method} with internal error: .${path}\n${err.stack}`));
+					xConsole.error(new Error(`Requested ${request.method} with internal error: .${path}\n${err.stack}`));
 				};
 			} catch (repError) {
 				body = `{\"error\":\"${repError}\"}`;
-				console.error(repError.stack);
+				xConsole.error(repError.stack);
 			};
 			requestEvent.respondWith(new Response(body), {status: status});
 		};
