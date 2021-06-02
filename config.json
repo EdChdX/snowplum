@@ -13,6 +13,7 @@
 				"outputLength": 384
 			}
 		},
+		"admin": [],
 		"map": "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_ "
 	},
 	"types": [
